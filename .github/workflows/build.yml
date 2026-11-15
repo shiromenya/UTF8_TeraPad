@@ -36,15 +36,26 @@ jobs:
             objdump -p dist/version.dll | grep -q "$fn" || { echo "Missing export: $fn"; exit 1; }
           done
 
+      - name: Package release zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/pkg | Out-Null
+          Copy-Item dist/version.dll, install.bat, install.ps1, README.md, LICENSE dist/pkg/
+          Compress-Archive -Path dist/pkg/* -DestinationPath dist/tpad_utf8.zip -Force
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tpad_utf8-version-dll
-          path: dist/version.dll
+          path: |
+            dist/version.dll
+            dist/tpad_utf8.zip
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/version.dll
+          files: |
+            dist/version.dll
+            dist/tpad_utf8.zip
           generate_release_notes: true
