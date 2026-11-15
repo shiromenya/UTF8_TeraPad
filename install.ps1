@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$Uninstall,
     [string]$TargetDir = "",
     [string]$LocalDllPath = ""
@@ -46,8 +46,8 @@ function Find-TeraPadDir {
 
     Add-Type -AssemblyName System.Windows.Forms
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Title = 'TeraPad.exe を選択してください'
-    $dlg.Filter = 'TeraPad (TeraPad.exe)|TeraPad.exe|実行ファイル (*.exe)|*.exe'
+    $dlg.Title = 'Select TeraPad.exe'
+    $dlg.Filter = 'TeraPad (TeraPad.exe)|TeraPad.exe|Executable (*.exe)|*.exe'
     if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         return (Split-Path -Parent $dlg.FileName)
     }
@@ -83,7 +83,7 @@ if ($TargetDir) {
     $TargetDir = $TargetDir.TrimEnd('\')
 }
 if (-not $TargetDir -or -not (Test-Path (Join-Path $TargetDir 'TeraPad.exe'))) {
-    Exit-Script 1 'TeraPad.exe が見つかりませんでした。処理を中止します。'
+    Exit-Script 1 'TeraPad.exe was not found. Aborting.'
     return
 }
 
@@ -93,7 +93,7 @@ $dstDll = Join-Path $TargetDir 'version.dll'
 if (-not (Test-DirWritable $TargetDir)) {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
-        Write-Host "管理者権限で再実行します: $TargetDir"
+        Write-Host "Requesting administrator privileges for: $TargetDir"
         $flags = "-TargetDir `"$TargetDir`""
         if ($Uninstall) { $flags += ' -Uninstall' }
         if ($LocalDllPath) { $flags += " -LocalDllPath `"$LocalDllPath`"" }
@@ -108,18 +108,18 @@ if (-not (Test-DirWritable $TargetDir)) {
         try {
             $proc = Start-Process powershell.exe -Verb RunAs -PassThru -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$targetScript`" $flags"
             if ($proc.ExitCode -ne 0) {
-                Exit-Script $proc.ExitCode "管理者権限での実行に失敗しました (ExitCode: $($proc.ExitCode))。"
+                Exit-Script $proc.ExitCode "Elevated execution failed (ExitCode: $($proc.ExitCode))."
                 return
             }
             if ($Uninstall) {
-                Write-Host "管理者権限での削除が完了しました: $dstDll"
+                Write-Host "Uninstalled (elevated): $dstDll"
             } else {
-                Write-Host "管理者権限での導入が完了しました: $dstDll"
+                Write-Host "Installed (elevated): $dstDll"
             }
             Exit-Script 0
             return
         } catch {
-            Exit-Script 1 "管理者権限の取得がキャンセルされたか、起動に失敗しました: $_"
+            Exit-Script 1 "Elevation was canceled or failed: $_"
             return
         } finally {
             if ($tempScript) { Remove-Item $tempScript -Force -ErrorAction SilentlyContinue }
@@ -129,10 +129,10 @@ if (-not (Test-DirWritable $TargetDir)) {
 
 $running = Get-Process -Name 'TeraPad' -ErrorAction SilentlyContinue
 if ($running) {
-    Write-Host '起動中の TeraPad を終了してから続行してください...'
+    Write-Host 'Waiting for running TeraPad to close...'
     $running | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
     if (Get-Process -Name 'TeraPad' -ErrorAction SilentlyContinue) {
-        Exit-Script 1 'TeraPad が起動中のため処理を中止しました。TeraPad を閉じてから再実行してください。'
+        Exit-Script 1 'TeraPad is still running. Please close TeraPad and run again.'
         return
     }
 }
@@ -140,9 +140,9 @@ if ($running) {
 if ($Uninstall) {
     if (Test-Path $dstDll) {
         Remove-Item $dstDll -Force
-        Write-Host "削除しました: $dstDll"
+        Write-Host "Removed: $dstDll"
     } else {
-        Write-Host "version.dll は既に存在しません: $TargetDir"
+        Write-Host "version.dll is not present in: $TargetDir"
     }
     Exit-Script 0
     return
@@ -156,7 +156,7 @@ if (-not $srcDll -or -not (Test-Path $srcDll)) {
         $srcDll = $bundled
     } else {
         $tempDll = Join-Path $env:TEMP "tpad_utf8_version_$([guid]::NewGuid().ToString('N')).dll"
-        Write-Host "最新版の version.dll をダウンロードしています..."
+        Write-Host 'Downloading latest version.dll...'
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $DownloadUrl -OutFile $tempDll -UseBasicParsing
         $srcDll = $tempDll
@@ -166,4 +166,4 @@ if (-not $srcDll -or -not (Test-Path $srcDll)) {
 Copy-Item -LiteralPath $srcDll -Destination $dstDll -Force
 if ($tempDll) { Remove-Item $tempDll -Force -ErrorAction SilentlyContinue }
 
-Write-Host "導入が完了しました: $dstDll"
+Write-Host "Installed: $dstDll"
