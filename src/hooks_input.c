@@ -118,7 +118,7 @@ static LONG WINAPI hook_ImmGetCompositionStringA(HIMC hIMC, DWORD dwIndex, LPVOI
 }
 
 static int WINAPI hook_GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount) {
-    if (g_utf8_doc_active && lpString && nMaxCount > 1) {
+    if (is_main_thread() && g_utf8_doc_active && lpString && nMaxCount > 1) {
         WCHAR *wbuf = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, (size_t)nMaxCount * sizeof(WCHAR));
         if (wbuf) {
             int wlen = GetWindowTextW(hWnd, wbuf, nMaxCount);
@@ -137,7 +137,7 @@ static int WINAPI hook_GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount) 
 }
 
 static BOOL WINAPI hook_SetWindowTextA(HWND hWnd, LPCSTR lpString) {
-    if (g_utf8_doc_active && lpString && has_non_ascii(lpString, -1) && is_valid_utf8(lpString, -1)) {
+    if (is_main_thread() && g_utf8_doc_active && lpString && has_non_ascii(lpString, -1) && is_valid_utf8(lpString, -1)) {
         int wlen = 0;
         WCHAR *wbuf = utf8_to_utf16_alloc(lpString, -1, &wlen);
         if (wbuf) {

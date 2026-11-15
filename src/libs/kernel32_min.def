@@ -6,6 +6,7 @@ CreateFileW@28
 DeleteCriticalSection@4
 DisableThreadLibraryCalls@4
 EnterCriticalSection@4
+GetCurrentThreadId@0
 GetEnvironmentVariableA@12
 GetModuleFileNameA@12
 GetModuleFileNameW@12

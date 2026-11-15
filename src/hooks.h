@@ -4,6 +4,7 @@
 #include <windows.h>
 
 void install_text_hooks(HMODULE exe);
+void cleanup_text_hooks(void);
 void install_input_hooks(HMODULE exe);
 
 #endif

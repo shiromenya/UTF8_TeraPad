@@ -4,7 +4,7 @@
 
 #define TPAD_SYNTH_LPARAM 0x00FF0001L
 #define SEG_CACHE_CAP 64
-#define SEG_MAX_BYTES 256
+#define SEG_MAX_BYTES 16384
 
 typedef BOOL (WINAPI *PFN_ExtTextOutA)(HDC, int, int, UINT, const RECT *, LPCSTR, UINT, const INT *);
 typedef BOOL (WINAPI *PFN_GetTextExtentPoint32A)(HDC, LPCSTR, int, LPSIZE);
@@ -23,8 +23,9 @@ typedef struct {
     int y;
     int total_w;
     int len;
-    BYTE bytes[SEG_MAX_BYTES];
-    INT dx[SEG_MAX_BYTES];
+    int cap;
+    BYTE *bytes;
+    INT *dx;
 } DrawSeg;
 
 static DrawSeg g_seg_cache[SEG_CACHE_CAP];
@@ -46,6 +47,23 @@ static void record_draw_segment(int x, int y, const char *str, UINT c, const INT
     g_seg_head = (g_seg_head + 1) % SEG_CACHE_CAP;
 
     int n = (c > SEG_MAX_BYTES) ? SEG_MAX_BYTES : (int)c;
+    if (n > seg->cap) {
+        int new_cap = (n < 256) ? 256 : n;
+        BYTE *nb = (BYTE *)HeapAlloc(GetProcessHeap(), 0, (size_t)new_cap);
+        INT *ndx = (INT *)HeapAlloc(GetProcessHeap(), 0, (size_t)new_cap * sizeof(INT));
+        if (!nb || !ndx) {
+            tpad_heap_free(nb);
+            tpad_heap_free(ndx);
+            seg->len = 0;
+            return;
+        }
+        tpad_heap_free(seg->bytes);
+        tpad_heap_free(seg->dx);
+        seg->bytes = nb;
+        seg->dx = ndx;
+        seg->cap = new_cap;
+    }
+
     int total = 0;
     for (int i = 0; i < n; i++) {
         seg->bytes[i] = (BYTE)str[i];
@@ -162,6 +180,7 @@ static int WINAPI hook_WideCharToMultiByte(UINT cp, DWORD flags, LPCWCH wc, int 
 }
 
 static BOOL WINAPI hook_ExtTextOutA(HDC hdc, int x, int y, UINT opt, const RECT *lprc, LPCSTR str, UINT c, const INT *dx) {
+    if (!is_main_thread()) return orig_ExtTextOutA(hdc, x, y, opt, lprc, str, c, dx);
     if (dx != NULL) {
         ensure_editor_subclassed(hdc);
         if (g_utf8_doc_active && str && c > 0) {
@@ -219,7 +238,7 @@ static BOOL WINAPI hook_ExtTextOutA(HDC hdc, int x, int y, UINT opt, const RECT 
 }
 
 static BOOL WINAPI hook_SetCaretPos(int X, int Y) {
-    if (g_utf8_doc_active && g_nav_pending > 0 && g_editor_hwnd && g_nav_vk) {
+    if (is_main_thread() && g_utf8_doc_active && g_nav_pending > 0 && g_editor_hwnd && g_nav_vk) {
         if (is_caret_on_utf8_cont(X, Y)) {
             g_nav_pending--;
             PostMessageA(g_editor_hwnd, WM_KEYDOWN, g_nav_vk, TPAD_SYNTH_LPARAM);
@@ -273,4 +292,15 @@ void install_text_hooks(HMODULE exe) {
     iat_hook_module(exe, "gdi32.dll", "GetTextExtentPointA", hook_GetTextExtentPointA, (void **)&orig_GetTextExtentPointA);
     iat_hook_module(exe, "user32.dll", "DrawTextA", hook_DrawTextA, (void **)&orig_DrawTextA);
     iat_hook_module(exe, "user32.dll", "SetCaretPos", hook_SetCaretPos, (void **)&orig_SetCaretPos);
+}
+
+void cleanup_text_hooks(void) {
+    for (int i = 0; i < SEG_CACHE_CAP; i++) {
+        tpad_heap_free(g_seg_cache[i].bytes);
+        tpad_heap_free(g_seg_cache[i].dx);
+        g_seg_cache[i].bytes = NULL;
+        g_seg_cache[i].dx = NULL;
+        g_seg_cache[i].len = 0;
+        g_seg_cache[i].cap = 0;
+    }
 }

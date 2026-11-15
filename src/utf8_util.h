@@ -9,6 +9,11 @@ typedef int (WINAPI *PFN_WideCharToMultiByte)(UINT, DWORD, LPCWCH, int, LPSTR, i
 extern PFN_MultiByteToWideChar g_orig_MB2WC;
 extern PFN_WideCharToMultiByte g_orig_WC2MB;
 extern BOOL g_utf8_doc_active;
+extern DWORD g_main_thread_id;
+
+static inline BOOL is_main_thread(void) {
+    return g_main_thread_id == 0 || GetCurrentThreadId() == g_main_thread_id;
+}
 
 void tpad_log_init(HMODULE hSelf);
 void tpad_log_close(void);

@@ -3,6 +3,7 @@
 PFN_MultiByteToWideChar g_orig_MB2WC = NULL;
 PFN_WideCharToMultiByte g_orig_WC2MB = NULL;
 BOOL g_utf8_doc_active = FALSE;
+DWORD g_main_thread_id = 0;
 
 static HANDLE g_log = INVALID_HANDLE_VALUE;
 static CRITICAL_SECTION g_log_cs;

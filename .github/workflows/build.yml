@@ -28,6 +28,14 @@ jobs:
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./build.ps1
 
+      - name: Verify PE32 architecture and exports
+        shell: msys2 {0}
+        run: |
+          objdump -f dist/version.dll | grep -q "pei-i386"
+          for fn in GetFileVersionInfoA GetFileVersionInfoW GetFileVersionInfoSizeA GetFileVersionInfoSizeW VerQueryValueA VerQueryValueW; do
+            objdump -p dist/version.dll | grep -q "$fn" || { echo "Missing export: $fn"; exit 1; }
+          done
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
