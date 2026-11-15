@@ -7,10 +7,14 @@
 $ErrorActionPreference = 'Stop'
 $RepoUrl = 'https://github.com/shiromenya/UTF8_TeraPad'
 $DownloadUrl = "$RepoUrl/releases/latest/download/version.dll"
+$ScriptUrl = 'https://raw.githubusercontent.com/shiromenya/UTF8_TeraPad/main/install.ps1'
 
 function Find-TeraPadDir {
-    $candidates = @(
-        (Join-Path $PSScriptRoot 'TeraPad.exe'),
+    $candidates = @()
+    if ($PSScriptRoot) {
+        $candidates += (Join-Path $PSScriptRoot 'TeraPad.exe')
+    }
+    $candidates += @(
         (Join-Path (Get-Location) 'TeraPad.exe'),
         "${env:ProgramFiles(x86)}\TeraPad\TeraPad.exe",
         "$env:ProgramFiles\TeraPad\TeraPad.exe",
@@ -76,21 +80,22 @@ if (-not (Test-DirWritable $TargetDir)) {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
         Write-Host "管理者権限で再実行します: $TargetDir"
-        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "& { $($MyInvocation.MyCommand.Definition) }")
+        $flags = "-TargetDir `"$TargetDir`""
+        if ($Uninstall) { $flags += ' -Uninstall' }
+        if ($LocalDllPath) { $flags += " -LocalDllPath `"$LocalDllPath`"" }
         if ($PSCommandPath) {
-            $flags = "-TargetDir `"$TargetDir`""
-            if ($Uninstall) { $flags += ' -Uninstall' }
-            if ($LocalDllPath) { $flags += " -LocalDllPath `"$LocalDllPath`"" }
-            Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $flags"
-            exit $LASTEXITCODE
+            $proc = Start-Process powershell.exe -Verb RunAs -PassThru -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $flags"
+            exit $proc.ExitCode
         } else {
             $scriptPath = Join-Path $env:TEMP "tpad_utf8_install_$([guid]::NewGuid().ToString('N')).ps1"
-            [System.IO.File]::WriteAllText($scriptPath, $MyInvocation.MyCommand.ScriptBlock.ToString(), [System.Text.Encoding]::UTF8)
-            $flags = "-TargetDir `"$TargetDir`""
-            if ($Uninstall) { $flags += ' -Uninstall' }
-            Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" $flags"
-            Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
-            exit $LASTEXITCODE
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $ScriptUrl -OutFile $scriptPath -UseBasicParsing
+            try {
+                $proc = Start-Process powershell.exe -Verb RunAs -PassThru -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" $flags"
+                exit $proc.ExitCode
+            } finally {
+                Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
