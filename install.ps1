@@ -65,12 +65,26 @@ function Test-DirWritable([string]$Dir) {
     }
 }
 
+$isIex = [string]::IsNullOrEmpty($PSCommandPath)
+
+function Exit-Script([int]$Code, [string]$ErrMsg = '') {
+    if ($ErrMsg) {
+        if ($isIex) { throw $ErrMsg }
+        Write-Error $ErrMsg
+    }
+    if ($isIex) { return }
+    exit $Code
+}
+
 if (-not $TargetDir) {
     $TargetDir = Find-TeraPadDir
 }
+if ($TargetDir) {
+    $TargetDir = $TargetDir.TrimEnd('\')
+}
 if (-not $TargetDir -or -not (Test-Path (Join-Path $TargetDir 'TeraPad.exe'))) {
-    Write-Error 'TeraPad.exe が見つかりませんでした。処理を中止します。'
-    exit 1
+    Exit-Script 1 'TeraPad.exe が見つかりませんでした。処理を中止します。'
+    return
 }
 
 $dstDll = Join-Path $TargetDir 'version.dll'
@@ -83,19 +97,32 @@ if (-not (Test-DirWritable $TargetDir)) {
         $flags = "-TargetDir `"$TargetDir`""
         if ($Uninstall) { $flags += ' -Uninstall' }
         if ($LocalDllPath) { $flags += " -LocalDllPath `"$LocalDllPath`"" }
-        if ($PSCommandPath) {
-            $proc = Start-Process powershell.exe -Verb RunAs -PassThru -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $flags"
-            exit $proc.ExitCode
-        } else {
-            $scriptPath = Join-Path $env:TEMP "tpad_utf8_install_$([guid]::NewGuid().ToString('N')).ps1"
+        $targetScript = $PSCommandPath
+        $tempScript = $null
+        if (-not $targetScript) {
+            $tempScript = Join-Path $env:TEMP "tpad_utf8_install_$([guid]::NewGuid().ToString('N')).ps1"
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $ScriptUrl -OutFile $scriptPath -UseBasicParsing
-            try {
-                $proc = Start-Process powershell.exe -Verb RunAs -PassThru -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" $flags"
-                exit $proc.ExitCode
-            } finally {
-                Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
+            Invoke-WebRequest -Uri $ScriptUrl -OutFile $tempScript -UseBasicParsing
+            $targetScript = $tempScript
+        }
+        try {
+            $proc = Start-Process powershell.exe -Verb RunAs -PassThru -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$targetScript`" $flags"
+            if ($proc.ExitCode -ne 0) {
+                Exit-Script $proc.ExitCode "管理者権限での実行に失敗しました (ExitCode: $($proc.ExitCode))。"
+                return
             }
+            if ($Uninstall) {
+                Write-Host "管理者権限での削除が完了しました: $dstDll"
+            } else {
+                Write-Host "管理者権限での導入が完了しました: $dstDll"
+            }
+            Exit-Script 0
+            return
+        } catch {
+            Exit-Script 1 "管理者権限の取得がキャンセルされたか、起動に失敗しました: $_"
+            return
+        } finally {
+            if ($tempScript) { Remove-Item $tempScript -Force -ErrorAction SilentlyContinue }
         }
     }
 }
@@ -105,8 +132,8 @@ if ($running) {
     Write-Host '起動中の TeraPad を終了してから続行してください...'
     $running | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
     if (Get-Process -Name 'TeraPad' -ErrorAction SilentlyContinue) {
-        Write-Error 'TeraPad が起動中のため処理を中止しました。TeraPad を閉じてから再実行してください。'
-        exit 1
+        Exit-Script 1 'TeraPad が起動中のため処理を中止しました。TeraPad を閉じてから再実行してください。'
+        return
     }
 }
 
@@ -117,7 +144,8 @@ if ($Uninstall) {
     } else {
         Write-Host "version.dll は既に存在しません: $TargetDir"
     }
-    exit 0
+    Exit-Script 0
+    return
 }
 
 $srcDll = $LocalDllPath
