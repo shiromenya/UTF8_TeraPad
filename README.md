@@ -19,12 +19,45 @@ TeraPad は内部処理が ANSI（Shift_JIS）ベースであるため、通常�
 3. **入力・クリップボードフック（`GetClipboardData` / `SetClipboardData` / `ImmGetCompositionStringA` / `GetWindowTextA` / `SetWindowTextA`）**
    `CF_UNICODETEXT` や `ImmGetCompositionStringW` を介して UTF-8 との橋渡しを試みます。
 
-## 使い方
+## 導入方法
 
-1. ビルドして生成された `dist\version.dll`（または Releases の `version.dll`）を、`TeraPad.exe` と同じフォルダにコピーします。
-2. 通常通り `TeraPad.exe` を起動します。
+### 1. TeraPad 本体の用意
+本リポジトリには TeraPad 本体は含まれません。事前に公式サイト等から **TeraPad（32bit版 / Ver.1.2.9 推奨）** を入手し、インストールまたは任意のフォルダへ展開しておいてください。
 
-アンインストールしたい場合は、`version.dll` を削除してください。
+### 2. `version.dll` の入手
+以下のいずれかの方法で `version.dll` を用意します。
+* **Releases からダウンロード:** GitHub の Releases ページから最新の `version.dll` をダウンロードします。
+* **自分でビルドする:** 下の「ビルド方法」に従って `dist\version.dll` を生成します。
+
+### 3. ファイルの配置
+1. 起動している TeraPad があれば、すべて終了します。
+2. `TeraPad.exe` が保存されているフォルダを開きます。
+   * **インストーラ版の例:** `C:\Program Files (x86)\TeraPad\`
+   * **ZIP版（ポータブル版）の例:** 展開した任意のフォルダ
+3. `TeraPad.exe` と同じフォルダに `version.dll` をコピーします。
+   ```text
+   TeraPad\
+   ├── TeraPad.exe
+   ├── version.dll   <-- ここに配置
+   └── ...
+   ```
+   ※ `Program Files (x86)` 配下へコピーする場合は、管理者権限の許可を求めるダイアログが表示されるので「続行」をクリックしてください。
+
+### 4. TeraPad 側の推奨設定
+導入後に TeraPad を起動し、UTF-8 ファイルを自動で判別・保存できるように設定を確認しておくことをおすすめします。
+1. メニューの **`表示`** ＞ **`オプション`** を開きます。
+2. **`文字コード`** タブを選択します。
+3. **「文字／改行コードを自動認識する」** にチェックを入れます。
+4. 新規作成時も UTF-8 にしたい場合は、「初期文字コード」「保存文字コード」を **`UTF-8N`**（BOMなし）または **`UTF-8`**（BOMあり）に変更し、「OK」を押します。
+
+### 5. アンインストール方法（元に戻す手順）
+1. 起動している TeraPad をすべて終了します。
+2. `TeraPad.exe` と同じフォルダに置いた **`version.dll` を削除** します。
+
+`TeraPad.exe` 本体のバイナリやレジストリ等は一切変更しないため、`version.dll` を消すだけで完全に元の状態に戻ります。
+
+### 6. デバッグログの出力（不具合調査用）
+環境変数 `TPAD_UTF8_LOG=1` を設定した状態で `TeraPad.exe` を起動すると、`version.dll` と同じフォルダに `tpad_utf8.log` が出力されます（書き込み権限があるフォルダに配置している場合）。
 
 ## ビルド方法
 
