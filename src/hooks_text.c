@@ -40,6 +40,9 @@ static int g_nav_pending = 0;
 static WPARAM g_nav_vk = 0;
 static BOOL g_paint_had_invalid = FALSE;
 static BOOL g_last_paint_had_invalid = FALSE;
+static LPARAM g_click_down_pos = -1;
+static int g_last_caret_x = -1;
+static int g_last_caret_y = -1;
 
 static void record_draw_segment(int x, int y, const char *str, UINT c, const INT *dx) {
     if (!str || !dx || c == 0) return;
@@ -116,11 +119,32 @@ static LRESULT CALLBACK editor_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 g_nav_vk = wParam;
                 g_nav_pending = g_utf8_doc_active ? 3 : 0;
             }
+        } else if (wParam == VK_UP || wParam == VK_DOWN) {
+            g_del_pending = 0;
+            if (lParam != TPAD_SYNTH_LPARAM) {
+                g_nav_vk = VK_LEFT;
+                g_nav_pending = g_utf8_doc_active ? 3 : 0;
+            }
         } else if (wParam != VK_SHIFT && wParam != VK_CONTROL && wParam != VK_MENU) {
             g_del_pending = 0;
             g_nav_pending = 0;
         }
-    } else if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN) {
+    } else if (msg == WM_LBUTTONDOWN) {
+        g_del_pending = 0;
+        g_nav_pending = 0;
+        g_click_down_pos = lParam;
+    } else if (msg == WM_LBUTTONUP) {
+        LRESULT res = CallWindowProcA(g_orig_editor_wndproc, hwnd, msg, wParam, lParam);
+        if (g_utf8_doc_active && lParam == g_click_down_pos && (wParam & MK_SHIFT) == 0) {
+            if (g_last_caret_x >= 0 && is_caret_on_utf8_cont(g_last_caret_x, g_last_caret_y)) {
+                g_nav_vk = VK_LEFT;
+                g_nav_pending = 2;
+                PostMessageA(hwnd, WM_KEYDOWN, VK_LEFT, TPAD_SYNTH_LPARAM);
+            }
+        }
+        g_click_down_pos = -1;
+        return res;
+    } else if (msg == WM_RBUTTONDOWN) {
         g_del_pending = 0;
         g_nav_pending = 0;
     } else if (msg == WM_NCDESTROY) {
@@ -135,6 +159,8 @@ static LRESULT CALLBACK editor_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     return CallWindowProcA(g_orig_editor_wndproc, hwnd, msg, wParam, lParam);
 }
 
+static BOOL g_doc_encoding_decided = FALSE;
+
 static void ensure_editor_subclassed(HDC hdc) {
     if (g_editor_hwnd != NULL) return;
     HWND hwnd = WindowFromDC(hdc);
@@ -143,6 +169,10 @@ static void ensure_editor_subclassed(HDC hdc) {
         if (cur && cur != editor_wndproc) {
             g_editor_hwnd = hwnd;
             g_orig_editor_wndproc = cur;
+            if (!g_doc_encoding_decided) {
+                g_utf8_doc_active = TRUE;
+                g_doc_encoding_decided = TRUE;
+            }
         }
     }
 }
@@ -158,8 +188,10 @@ static int utf8_seq_len(unsigned char b) {
 static int WINAPI hook_MultiByteToWideChar(UINT cp, DWORD flags, LPCCH mb, int cb_mb, LPWSTR wc, int cch_wc) {
     if (cp == 65001) {
         g_utf8_doc_active = TRUE;
+        g_doc_encoding_decided = TRUE;
     } else if (cp == 51932 || cp == 50220 || cp == 50222 || cp == 1200 || cp == 1201) {
         g_utf8_doc_active = FALSE;
+        g_doc_encoding_decided = TRUE;
     }
 
     if (g_utf8_doc_active && (cp == 0 || cp == 932) && mb && cb_mb != 0) {
@@ -191,19 +223,23 @@ static BOOL WINAPI hook_ExtTextOutA(HDC hdc, int x, int y, UINT opt, const RECT 
         int wlen = 0;
         WCHAR *wbuf = utf8_to_utf16_alloc(str, (int)c, &wlen);
         if (!wbuf && dx != NULL) {
-            g_paint_had_invalid = TRUE;
             if (g_del_pending > 0 && g_editor_hwnd && g_del_vk) {
+                g_paint_had_invalid = TRUE;
                 g_del_pending--;
                 PostMessageA(g_editor_hwnd, WM_KEYDOWN, g_del_vk, TPAD_SYNTH_LPARAM);
-            }
-            int flen = g_orig_MB2WC(65001, 0, str, (int)c, NULL, 0);
-            if (flen > 0) {
-                wbuf = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, (size_t)(flen + 1) * sizeof(WCHAR));
-                if (wbuf) {
-                    g_orig_MB2WC(65001, 0, str, (int)c, wbuf, flen);
-                    wbuf[flen] = L'\0';
-                    wlen = flen;
+                int flen = g_orig_MB2WC(65001, 0, str, (int)c, NULL, 0);
+                if (flen > 0) {
+                    wbuf = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, (size_t)(flen + 1) * sizeof(WCHAR));
+                    if (wbuf) {
+                        g_orig_MB2WC(65001, 0, str, (int)c, wbuf, flen);
+                        wbuf[flen] = L'\0';
+                        wlen = flen;
+                    }
                 }
+            } else {
+                /* Non-UTF-8 byte sequence (e.g. Shift_JIS file opened): switch out of UTF-8 mode and render as ANSI */
+                g_utf8_doc_active = FALSE;
+                return orig_ExtTextOutA(hdc, x, y, opt, lprc, str, c, dx);
             }
         }
         if (wbuf) {
@@ -238,12 +274,16 @@ static BOOL WINAPI hook_ExtTextOutA(HDC hdc, int x, int y, UINT opt, const RECT 
 }
 
 static BOOL WINAPI hook_SetCaretPos(int X, int Y) {
-    if (is_main_thread() && g_utf8_doc_active && g_nav_pending > 0 && g_editor_hwnd && g_nav_vk) {
-        if (is_caret_on_utf8_cont(X, Y)) {
-            g_nav_pending--;
-            PostMessageA(g_editor_hwnd, WM_KEYDOWN, g_nav_vk, TPAD_SYNTH_LPARAM);
-        } else {
-            g_nav_pending = 0;
+    if (is_main_thread()) {
+        g_last_caret_x = X;
+        g_last_caret_y = Y;
+        if (g_utf8_doc_active && g_nav_pending > 0 && g_editor_hwnd && g_nav_vk) {
+            if (is_caret_on_utf8_cont(X, Y)) {
+                g_nav_pending--;
+                PostMessageA(g_editor_hwnd, WM_KEYDOWN, g_nav_vk, TPAD_SYNTH_LPARAM);
+            } else {
+                g_nav_pending = 0;
+            }
         }
     }
     return orig_SetCaretPos(X, Y);

@@ -137,13 +137,19 @@ static int WINAPI hook_GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount) 
 }
 
 static BOOL WINAPI hook_SetWindowTextA(HWND hWnd, LPCSTR lpString) {
-    if (is_main_thread() && g_utf8_doc_active && lpString && has_non_ascii(lpString, -1) && is_valid_utf8(lpString, -1)) {
-        int wlen = 0;
-        WCHAR *wbuf = utf8_to_utf16_alloc(lpString, -1, &wlen);
-        if (wbuf) {
-            BOOL ok = SetWindowTextW(hWnd, wbuf);
-            tpad_heap_free(wbuf);
-            return ok;
+    if (is_main_thread() && lpString) {
+        /* Detect "無題" (Shift_JIS: 96 B3 91 E8) in window title -> new empty document */
+        const unsigned char *u = (const unsigned char *)lpString;
+        if (u[0] == 0x96 && u[1] == 0xB3 && u[2] == 0x91 && u[3] == 0xE8) {
+            g_utf8_doc_active = TRUE;
+        } else if (g_utf8_doc_active && has_non_ascii(lpString, -1) && is_valid_utf8(lpString, -1)) {
+            int wlen = 0;
+            WCHAR *wbuf = utf8_to_utf16_alloc(lpString, -1, &wlen);
+            if (wbuf) {
+                BOOL ok = SetWindowTextW(hWnd, wbuf);
+                tpad_heap_free(wbuf);
+                return ok;
+            }
         }
     }
     return orig_SetWindowTextA(hWnd, lpString);
