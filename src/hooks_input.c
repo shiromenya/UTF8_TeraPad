@@ -1,0 +1,158 @@
+#include "hooks.h"
+#include "iat_hook.h"
+#include "utf8_util.h"
+
+typedef HANDLE (WINAPI *PFN_GetClipboardData)(UINT);
+typedef HANDLE (WINAPI *PFN_SetClipboardData)(UINT, HANDLE);
+typedef LONG   (WINAPI *PFN_ImmGetCompositionStringA)(HIMC, DWORD, LPVOID, DWORD);
+typedef int    (WINAPI *PFN_GetWindowTextA)(HWND, LPSTR, int);
+typedef BOOL   (WINAPI *PFN_SetWindowTextA)(HWND, LPCSTR);
+
+static PFN_GetClipboardData orig_GetClipboardData = NULL;
+static PFN_SetClipboardData orig_SetClipboardData = NULL;
+static PFN_ImmGetCompositionStringA orig_ImmGetCompositionStringA = NULL;
+static PFN_GetWindowTextA orig_GetWindowTextA = NULL;
+static PFN_SetWindowTextA orig_SetWindowTextA = NULL;
+
+static HANDLE g_last_clip_utf8 = NULL;
+
+static HANDLE WINAPI hook_GetClipboardData(UINT uFormat) {
+    if (uFormat == CF_TEXT) {
+        HANDLE hUni = orig_GetClipboardData(CF_UNICODETEXT);
+        if (hUni) {
+            const WCHAR *ws = (const WCHAR *)GlobalLock(hUni);
+            if (ws) {
+                int wlen = lstrlenW(ws);
+                BOOL non_sjis = has_non_sjis_unicode(ws, wlen);
+                if (non_sjis) {
+                    g_utf8_doc_active = TRUE;
+                }
+                if (g_utf8_doc_active || non_sjis) {
+                    int u8len = g_orig_WC2MB(65001, 0, ws, wlen + 1, NULL, 0, NULL, NULL);
+                    if (u8len > 0) {
+                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)u8len);
+                        if (hMem) {
+                            char *dst = (char *)GlobalLock(hMem);
+                            if (dst) {
+                                g_orig_WC2MB(65001, 0, ws, wlen + 1, dst, u8len, NULL, NULL);
+                                GlobalUnlock(hMem);
+                                GlobalUnlock(hUni);
+                                if (g_last_clip_utf8) {
+                                    GlobalFree(g_last_clip_utf8);
+                                }
+                                g_last_clip_utf8 = hMem;
+                                return hMem;
+                            }
+                            GlobalFree(hMem);
+                        }
+                    }
+                }
+                GlobalUnlock(hUni);
+            }
+        }
+    }
+    return orig_GetClipboardData(uFormat);
+}
+
+static HANDLE WINAPI hook_SetClipboardData(UINT uFormat, HANDLE hMem) {
+    if (uFormat == CF_TEXT && hMem && g_utf8_doc_active) {
+        const char *src = (const char *)GlobalLock(hMem);
+        if (src) {
+            int len = lstrlenA(src);
+            if (has_non_ascii(src, len) && is_valid_utf8(src, len)) {
+                int wlen = 0;
+                WCHAR *ws = utf8_to_utf16_alloc(src, len + 1, &wlen);
+                if (ws) {
+                    HGLOBAL hUni = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)wlen * sizeof(WCHAR));
+                    if (hUni) {
+                        WCHAR *dst = (WCHAR *)GlobalLock(hUni);
+                        if (dst) {
+                            mem_copy(dst, ws, (size_t)wlen * sizeof(WCHAR));
+                            GlobalUnlock(hUni);
+                            orig_SetClipboardData(CF_UNICODETEXT, hUni);
+                        } else {
+                            GlobalFree(hUni);
+                        }
+                    }
+                    tpad_heap_free(ws);
+                }
+            }
+            GlobalUnlock(hMem);
+        }
+    }
+    return orig_SetClipboardData(uFormat, hMem);
+}
+
+static LONG WINAPI hook_ImmGetCompositionStringA(HIMC hIMC, DWORD dwIndex, LPVOID lpBuf, DWORD dwBufLen) {
+    if ((dwIndex & (GCS_RESULTSTR | GCS_COMPSTR)) != 0) {
+        LONG wbytes = ImmGetCompositionStringW(hIMC, dwIndex, NULL, 0);
+        if (wbytes > 0) {
+            WCHAR *wbuf = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, (size_t)wbytes + sizeof(WCHAR));
+            if (wbuf) {
+                LONG got = ImmGetCompositionStringW(hIMC, dwIndex, wbuf, (DWORD)wbytes);
+                if (got > 0) {
+                    int actual_wlen = (int)(got / (LONG)sizeof(WCHAR));
+                    wbuf[actual_wlen] = L'\0';
+                    BOOL non_sjis = has_non_sjis_unicode(wbuf, actual_wlen);
+                    if (non_sjis) g_utf8_doc_active = TRUE;
+
+                    if (g_utf8_doc_active || non_sjis) {
+                        int u8len = g_orig_WC2MB(65001, 0, wbuf, actual_wlen, NULL, 0, NULL, NULL);
+                        if (u8len > 0) {
+                            if (dwBufLen > 0 && lpBuf) {
+                                int copy_len = ((DWORD)u8len <= dwBufLen) ? u8len : (int)dwBufLen;
+                                g_orig_WC2MB(65001, 0, wbuf, actual_wlen, (LPSTR)lpBuf, copy_len, NULL, NULL);
+                                tpad_heap_free(wbuf);
+                                return copy_len;
+                            }
+                            tpad_heap_free(wbuf);
+                            return u8len;
+                        }
+                    }
+                }
+                tpad_heap_free(wbuf);
+            }
+        }
+    }
+    return orig_ImmGetCompositionStringA(hIMC, dwIndex, lpBuf, dwBufLen);
+}
+
+static int WINAPI hook_GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount) {
+    if (g_utf8_doc_active && lpString && nMaxCount > 1) {
+        WCHAR *wbuf = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, (size_t)nMaxCount * sizeof(WCHAR));
+        if (wbuf) {
+            int wlen = GetWindowTextW(hWnd, wbuf, nMaxCount);
+            if (wlen > 0 && has_non_sjis_unicode(wbuf, wlen)) {
+                int u8len = g_orig_WC2MB(65001, 0, wbuf, wlen, lpString, nMaxCount - 1, NULL, NULL);
+                if (u8len > 0) {
+                    lpString[u8len] = '\0';
+                    tpad_heap_free(wbuf);
+                    return u8len;
+                }
+            }
+            tpad_heap_free(wbuf);
+        }
+    }
+    return orig_GetWindowTextA(hWnd, lpString, nMaxCount);
+}
+
+static BOOL WINAPI hook_SetWindowTextA(HWND hWnd, LPCSTR lpString) {
+    if (g_utf8_doc_active && lpString && has_non_ascii(lpString, -1) && is_valid_utf8(lpString, -1)) {
+        int wlen = 0;
+        WCHAR *wbuf = utf8_to_utf16_alloc(lpString, -1, &wlen);
+        if (wbuf) {
+            BOOL ok = SetWindowTextW(hWnd, wbuf);
+            tpad_heap_free(wbuf);
+            return ok;
+        }
+    }
+    return orig_SetWindowTextA(hWnd, lpString);
+}
+
+void install_input_hooks(HMODULE exe) {
+    iat_hook_module(exe, "user32.dll", "GetClipboardData", hook_GetClipboardData, (void **)&orig_GetClipboardData);
+    iat_hook_module(exe, "user32.dll", "SetClipboardData", hook_SetClipboardData, (void **)&orig_SetClipboardData);
+    iat_hook_module(exe, "user32.dll", "GetWindowTextA", hook_GetWindowTextA, (void **)&orig_GetWindowTextA);
+    iat_hook_module(exe, "user32.dll", "SetWindowTextA", hook_SetWindowTextA, (void **)&orig_SetWindowTextA);
+    iat_hook_module(exe, "imm32.dll", "ImmGetCompositionStringA", hook_ImmGetCompositionStringA, (void **)&orig_ImmGetCompositionStringA);
+}

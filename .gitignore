@@ -1,0 +1,9 @@
+build/
+dist/
+extracted/
+test_env/
+*.exe
+*.dll
+*.log
+*.o
+*.a
