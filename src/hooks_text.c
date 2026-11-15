@@ -203,8 +203,14 @@ static int WINAPI hook_MultiByteToWideChar(UINT cp, DWORD flags, LPCCH mb, int c
     return g_orig_MB2WC(cp, flags, mb, cb_mb, wc, cch_wc);
 }
 
+static BOOL is_other_window_dc(HDC hdc) {
+    HWND w = WindowFromDC(hdc);
+    return (w != NULL && g_editor_hwnd != NULL && w != g_editor_hwnd);
+}
+
 static int WINAPI hook_WideCharToMultiByte(UINT cp, DWORD flags, LPCWCH wc, int cch_wc, LPSTR mb, int cb_mb, LPCCH def, LPBOOL used_def) {
-    if (g_utf8_doc_active && (cp == 0 || cp == 932)) {
+    if (g_utf8_doc_active && (cp == 0 || cp == 932) &&
+        ((flags & 0x0400) || (wc && has_non_sjis_unicode(wc, cch_wc)))) {
         if (used_def) *used_def = FALSE;
         return g_orig_WC2MB(65001, 0, wc, cch_wc, mb, cb_mb, NULL, NULL);
     }
@@ -212,7 +218,7 @@ static int WINAPI hook_WideCharToMultiByte(UINT cp, DWORD flags, LPCWCH wc, int 
 }
 
 static BOOL WINAPI hook_ExtTextOutA(HDC hdc, int x, int y, UINT opt, const RECT *lprc, LPCSTR str, UINT c, const INT *dx) {
-    if (!is_main_thread()) return orig_ExtTextOutA(hdc, x, y, opt, lprc, str, c, dx);
+    if (!is_main_thread() || is_other_window_dc(hdc)) return orig_ExtTextOutA(hdc, x, y, opt, lprc, str, c, dx);
     if (dx != NULL) {
         ensure_editor_subclassed(hdc);
         if (g_utf8_doc_active && str && c > 0) {
@@ -290,7 +296,7 @@ static BOOL WINAPI hook_SetCaretPos(int X, int Y) {
 }
 
 static BOOL hook_GetTextExtentPoint_common(HDC hdc, LPCSTR str, int c, LPSIZE psizl, BOOL is_32) {
-    if (g_utf8_doc_active && str && c > 0 && has_non_ascii(str, c)) {
+    if (g_utf8_doc_active && !is_other_window_dc(hdc) && str && c > 0 && has_non_ascii(str, c)) {
         int wlen = 0;
         WCHAR *wbuf = utf8_to_utf16_alloc(str, c, &wlen);
         if (wbuf) {
@@ -312,7 +318,7 @@ static BOOL WINAPI hook_GetTextExtentPointA(HDC hdc, LPCSTR str, int c, LPSIZE p
 }
 
 static int WINAPI hook_DrawTextA(HDC hdc, LPCSTR str, int c, LPRECT lprc, UINT fmt) {
-    if (g_utf8_doc_active && str && c != 0 && has_non_ascii(str, c)) {
+    if (g_utf8_doc_active && !is_other_window_dc(hdc) && str && c != 0 && has_non_ascii(str, c)) {
         int wlen = 0;
         WCHAR *wbuf = utf8_to_utf16_alloc(str, c, &wlen);
         if (wbuf) {

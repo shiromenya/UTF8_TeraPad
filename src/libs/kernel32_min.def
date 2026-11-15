@@ -30,6 +30,7 @@ MultiByteToWideChar@24
 VirtualProtect@16
 WideCharToMultiByte@32
 WriteFile@20
+lstrcmpiA@8
 lstrcpyA@8
 lstrcpyW@8
 lstrlenA@4
